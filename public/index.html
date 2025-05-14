@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ollama API Client</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1, h2 {
+            color: #2c3e50;
+        }
+        .container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        .card {
+            background: #f9f9f9;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            flex: 1 1 45%;
+            min-width: 300px;
+        }
+        button {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 10px 15px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 4px 2px;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        input, textarea, select {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+            margin-top: 6px;
+            margin-bottom: 16px;
+            resize: vertical;
+        }
+        #response, #chatResponse {
+            background-color: #f1f1f1;
+            border-left: 3px solid #4CAF50;
+            padding: 15px;
+            margin-top: 10px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+        }
+        .model-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px;
+            border-bottom: 1px solid #eee;
+        }
+        .model-name {
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>Ollama API Client</h1>
+    
+    <div class="container">
+        <div class="card">
+            <h2>Available Models</h2>
+            <button id="loadModels">Load Models</button>
+            <div id="modelsList"></div>
+        </div>
+        
+        <div class="card">
+            <h2>Generate Text</h2>
+            <label for="modelSelect">Select Model:</label>
+            <select id="modelSelect"></select>
+            
+            <label for="prompt">Prompt:</label>
+            <textarea id="prompt" rows="4" placeholder="Enter your prompt here..."></textarea>
+            
+            <button id="generateBtn">Generate</button>
+            <div id="response"></div>
+        </div>
+        
+        <div class="card">
+            <h2>Chat</h2>
+            <label for="chatModelSelect">Select Model:</label>
+            <select id="chatModelSelect"></select>
+            
+            <div id="chatHistory">
+                <label for="systemPrompt">System Prompt (optional):</label>
+                <textarea id="systemPrompt" rows="2" placeholder="You are a helpful assistant..."></textarea>
+                
+                <label for="userMessage">Your Message:</label>
+                <textarea id="userMessage" rows="4" placeholder="Enter your message here..."></textarea>
+            </div>
+            
+            <button id="chatBtn">Send Message</button>
+            <div id="chatResponse"></div>
+        </div>
+        
+        <div class="card">
+            <h2>Pull New Model</h2>
+            <label for="modelName">Model Name:</label>
+            <input type="text" id="modelName" placeholder="e.g., llama2:7b">
+            
+            <button id="pullModelBtn">Pull Model</button>
+            <div id="pullStatus"></div>
+        </div>
+    </div>
+
+    <script>
+        // Helper function for API calls
+        async function fetchAPI(endpoint, method = 'GET', body = null) {
+            const options = {
+                method,
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            };
+            
+            if (body) {
+                options.body = JSON.stringify(body);
+            }
+            
+            const response = await fetch(endpoint, options);
+            return await response.json();
+        }
+        
+        // Load models
+        document.getElementById('loadModels').addEventListener('click', async () => {
+            const modelsListDiv = document.getElementById('modelsList');
+            const modelSelect = document.getElementById('modelSelect');
+            const chatModelSelect = document.getElementById('chatModelSelect');
+            
+            modelsListDiv.innerHTML = 'Loading...';
+            modelSelect.innerHTML = '';
+            chatModelSelect.innerHTML = '';
+            
+            try {
+                const data = await fetchAPI('/api/models');
+                
+                modelsListDiv.innerHTML = '';
+                
+                if (data.models && data.models.length > 0) {
+                    data.models.forEach(model => {
+                        // Add to models list
+                        const modelItem = document.createElement('div');
+                        modelItem.className = 'model-item';
+                        modelItem.innerHTML = `
+                            <span class="model-name">${model.name}</span>
+                            <span>${(model.size / (1024 * 1024 * 1024)).toFixed(2)} GB</span>
+                        `;
+                        modelsListDiv.appendChild(modelItem);
+                        
+                        // Add to selects
+                        const option = document.createElement('option');
+                        option.value = model.name;
+                        option.textContent = model.name;
+                        modelSelect.appendChild(option.cloneNode(true));
+                        chatModelSelect.appendChild(option);
+                    });
+                } else {
+                    modelsListDiv.innerHTML = 'No models found';
+                }
+            } catch (error) {
+                modelsListDiv.innerHTML = `Error: ${error.message}`;
+            }
+        });
+        
+        // Generate text
+        document.getElementById('generateBtn').addEventListener('click', async () => {
+            const model = document.getElementById('modelSelect').value;
+            const prompt = document.getElementById('prompt').value;
+            const responseDiv = document.getElementById('response');
+            
+            if (!model) {
+                responseDiv.textContent = 'Please select a model';
+                return;
+            }
+            
+            if (!prompt) {
+                responseDiv.textContent = 'Please enter a prompt';
+                return;
+            }
+            
+            responseDiv.textContent = 'Generating...';
+            
+            try {
+                const data = await fetchAPI('/api/generate', 'POST', {
+                    model,
+                    prompt
+                });
+                
+                responseDiv.textContent = data.response;
+            } catch (error) {
+                responseDiv.textContent = `Error: ${error.message}`;
+            }
+        });
+        
+        // Chat
+        document.getElementById('chatBtn').addEventListener('click', async () => {
+            const model = document.getElementById('chatModelSelect').value;
+            const systemPrompt = document.getElementById('systemPrompt').value;
+            const userMessage = document.getElementById('userMessage').value;
+            const responseDiv = document.getElementById('chatResponse');
+            
+            if (!model) {
+                responseDiv.textContent = 'Please select a model';
+                return;
+            }
+            
+            if (!userMessage) {
+                responseDiv.textContent = 'Please enter a message';
+                return;
+            }
+            
+            responseDiv.textContent = 'Thinking...';
+            
+            const messages = [];
+            
+            if (systemPrompt) {
+                messages.push({
+                    role: 'system',
+                    content: systemPrompt
+                });
+            }
+            
+            messages.push({
+                role: 'user',
+                content: userMessage
+            });
+            
+            try {
+                const data = await fetchAPI('/api/chat', 'POST', {
+                    model,
+                    messages
+                });
+                
+                responseDiv.textContent = data.message?.content || 'No response received';
+            } catch (error) {
+                responseDiv.textContent = `Error: ${error.message}`;
+            }
+        });
+        
+        // Pull model
+        document.getElementById('pullModelBtn').addEventListener('click', async () => {
+            const modelName = document.getElementById('modelName').value;
+            const statusDiv = document.getElementById('pullStatus');
+            
+            if (!modelName) {
+                statusDiv.textContent = 'Please enter a model name';
+                return;
+            }
+            
+            statusDiv.textContent = `Starting download of ${modelName}...`;
+            
+            try {
+                const data = await fetchAPI('/api/models/pull', 'POST', {
+                    name: modelName
+                });
+                
+                statusDiv.textContent = `Pull initiated for ${modelName}. Check server logs for progress.`;
+            } catch (error) {
+                statusDiv.textContent = `Error: ${error.message}`;
+            }
+        });
+        
+        // Load models on page load
+        window.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('loadModels').click();
+        });
+    </script>
+</body>
+</html> 

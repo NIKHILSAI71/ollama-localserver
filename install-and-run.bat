@@ -1,0 +1,9 @@
+@echo off
+echo Installing dependencies...
+npm install
+
+echo Starting Ollama server...
+echo Make sure Ollama is running on your system (ollama serve)
+
+echo Starting the API server...
+npm start 
