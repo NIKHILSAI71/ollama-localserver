@@ -3,13 +3,39 @@ const axios = require('axios');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const multer = require('multer');
+const { v4: uuidv4 } = require('uuid');
 
 // Read config from env variables or use defaults
 const PORT = process.env.PORT || 3000;
 const OLLAMA_API_HOST = process.env.OLLAMA_API_HOST || 'http://localhost:11434';
-const REQUEST_TIMEOUT = 30000; // 30 second timeout for API requests
+const REQUEST_TIMEOUT = parseInt(process.env.REQUEST_TIMEOUT || '60000'); // 60 second timeout for API requests
+const OLLAMA_KEEP_ALIVE = process.env.OLLAMA_KEEP_ALIVE || '5m'; // Pass through to Ollama
 
 const app = express();
+
+// Configure storage for uploaded files
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = path.join(__dirname, 'uploads');
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    // Generate unique filename
+    const uniqueName = `${uuidv4()}-${file.originalname}`;
+    cb(null, uniqueName);
+  }
+});
+
+const upload = multer({ storage: storage });
+
+// Configure axios with defaults to improve reliability
+axios.defaults.timeout = REQUEST_TIMEOUT;
+axios.defaults.maxContentLength = 50 * 1024 * 1024; // 50MB
+axios.defaults.maxBodyLength = 50 * 1024 * 1024; // 50MB
 
 // Middleware
 app.use(cors());
@@ -17,6 +43,7 @@ app.use(express.json());
 
 // Serve static files from the public directory
 app.use(express.static(path.join(__dirname, 'public')));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Log requests
 app.use((req, res, next) => {
@@ -25,6 +52,33 @@ app.use((req, res, next) => {
 });
 
 // API Routes
+
+// File upload endpoint
+app.post('/api/upload', upload.single('file'), (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+    
+    const fileUrl = `/uploads/${req.file.filename}`;
+    
+    res.json({
+      success: true,
+      file: {
+        name: req.file.originalname,
+        url: fileUrl,
+        mimetype: req.file.mimetype,
+        size: req.file.size
+      }
+    });
+  } catch (error) {
+    console.error('Error uploading file:', error.message);
+    res.status(500).json({ 
+      error: 'Failed to upload file', 
+      details: error.message 
+    });
+  }
+});
 
 // List available models
 app.get('/api/models', async (req, res) => {
@@ -49,10 +103,11 @@ app.post('/api/generate', async (req, res) => {
       return res.status(400).json({ error: 'Model and prompt are required' });
     }
 
-    // Add num_predict if not already set (defaults to 128 tokens)
+    // Add num_predict if not already set
     const requestOptions = {
       ...options,
-      num_predict: options.num_predict || 512
+      num_predict: options.num_predict || 512,
+      keep_alive: options.keep_alive || OLLAMA_KEEP_ALIVE
     };
 
     const response = await axios.post(`${OLLAMA_API_HOST}/api/generate`, {
@@ -80,11 +135,14 @@ app.post('/api/chat', async (req, res) => {
       return res.status(400).json({ error: 'Model and messages are required' });
     }
 
-    // Add num_predict if not already set (defaults to 128 tokens)
+    // Add num_predict if not already set
     const requestOptions = {
       ...options,
-      num_predict: options.num_predict || 512
+      num_predict: options.num_predict || 512,
+      keep_alive: options.keep_alive || OLLAMA_KEEP_ALIVE
     };
+
+    console.log(`Chat request to ${model} with options:`, requestOptions);
 
     const response = await axios.post(`${OLLAMA_API_HOST}/api/chat`, {
       model,
@@ -92,9 +150,22 @@ app.post('/api/chat', async (req, res) => {
       options: requestOptions
     }, { timeout: REQUEST_TIMEOUT });
 
+    if (!response.data || !response.data.message) {
+      console.error('Ollama returned invalid response structure:', response.data);
+      return res.status(500).json({
+        error: 'Invalid response from Ollama',
+        details: 'The response did not contain the expected message structure'
+      });
+    }
+
+    console.log('Chat response received successfully');
     res.json(response.data);
   } catch (error) {
     console.error('Error in chat completion:', error.message);
+    if (error.response) {
+      console.error('Error response data:', error.response.data);
+    }
+    
     res.status(500).json({ 
       error: 'Failed to process chat completion', 
       details: error.message 
@@ -114,7 +185,8 @@ app.post('/api/generate/stream', async (req, res) => {
     // Add num_predict if not already set
     const requestOptions = {
       ...options,
-      num_predict: options.num_predict || 512
+      num_predict: options.num_predict || 512,
+      keep_alive: options.keep_alive || OLLAMA_KEEP_ALIVE
     };
     
     // Set up SSE headers
@@ -183,7 +255,7 @@ app.post('/api/models/pull', async (req, res) => {
     }
 
     // Start the pull process
-    const response = await axios.post(`${OLLAMA_API_HOST}/api/pull`, { name }, { timeout: 60000 });
+    const response = await axios.post(`${OLLAMA_API_HOST}/api/pull`, { name }, { timeout: 300000 }); // 5 min timeout
     res.json(response.data);
   } catch (error) {
     console.error('Error pulling model:', error.message);
@@ -212,6 +284,12 @@ app.use((err, req, res, next) => {
     details: err.message 
   });
 });
+
+// Create uploads directory if it doesn't exist
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
 
 // Start the server
 app.listen(PORT, () => {
