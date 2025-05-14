@@ -7,6 +7,7 @@ const path = require('path');
 // Read config from env variables or use defaults
 const PORT = process.env.PORT || 3000;
 const OLLAMA_API_HOST = process.env.OLLAMA_API_HOST || 'http://localhost:11434';
+const REQUEST_TIMEOUT = 30000; // 30 second timeout for API requests
 
 const app = express();
 
@@ -28,7 +29,7 @@ app.use((req, res, next) => {
 // List available models
 app.get('/api/models', async (req, res) => {
   try {
-    const response = await axios.get(`${OLLAMA_API_HOST}/api/tags`);
+    const response = await axios.get(`${OLLAMA_API_HOST}/api/tags`, { timeout: REQUEST_TIMEOUT });
     res.json(response.data);
   } catch (error) {
     console.error('Error fetching models:', error.message);
@@ -42,17 +43,23 @@ app.get('/api/models', async (req, res) => {
 // Generate completions
 app.post('/api/generate', async (req, res) => {
   try {
-    const { model, prompt, options } = req.body;
+    const { model, prompt, options = {} } = req.body;
     
     if (!model || !prompt) {
       return res.status(400).json({ error: 'Model and prompt are required' });
     }
 
+    // Add num_predict if not already set (defaults to 128 tokens)
+    const requestOptions = {
+      ...options,
+      num_predict: options.num_predict || 512
+    };
+
     const response = await axios.post(`${OLLAMA_API_HOST}/api/generate`, {
       model,
       prompt,
-      options: options || {}
-    });
+      options: requestOptions
+    }, { timeout: REQUEST_TIMEOUT });
 
     res.json(response.data);
   } catch (error) {
@@ -67,17 +74,23 @@ app.post('/api/generate', async (req, res) => {
 // Chat completions
 app.post('/api/chat', async (req, res) => {
   try {
-    const { model, messages, options } = req.body;
+    const { model, messages, options = {} } = req.body;
     
     if (!model || !messages) {
       return res.status(400).json({ error: 'Model and messages are required' });
     }
 
+    // Add num_predict if not already set (defaults to 128 tokens)
+    const requestOptions = {
+      ...options,
+      num_predict: options.num_predict || 512
+    };
+
     const response = await axios.post(`${OLLAMA_API_HOST}/api/chat`, {
       model,
       messages,
-      options: options || {}
-    });
+      options: requestOptions
+    }, { timeout: REQUEST_TIMEOUT });
 
     res.json(response.data);
   } catch (error) {
@@ -92,11 +105,17 @@ app.post('/api/chat', async (req, res) => {
 // Stream completion (for SSE)
 app.post('/api/generate/stream', async (req, res) => {
   try {
-    const { model, prompt, options } = req.body;
+    const { model, prompt, options = {} } = req.body;
     
     if (!model || !prompt) {
       return res.status(400).json({ error: 'Model and prompt are required' });
     }
+    
+    // Add num_predict if not already set
+    const requestOptions = {
+      ...options,
+      num_predict: options.num_predict || 512
+    };
     
     // Set up SSE headers
     res.setHeader('Content-Type', 'text/event-stream');
@@ -108,9 +127,10 @@ app.post('/api/generate/stream', async (req, res) => {
       model,
       prompt,
       stream: true,
-      options: options || {}
+      options: requestOptions
     }, {
-      responseType: 'stream'
+      responseType: 'stream',
+      timeout: REQUEST_TIMEOUT
     });
     
     // Forward the streaming response
@@ -140,7 +160,8 @@ app.get('/api/models/:model', async (req, res) => {
   try {
     const modelName = req.params.model;
     const response = await axios.get(`${OLLAMA_API_HOST}/api/show`, {
-      params: { name: modelName }
+      params: { name: modelName },
+      timeout: REQUEST_TIMEOUT
     });
     res.json(response.data);
   } catch (error) {
@@ -162,7 +183,7 @@ app.post('/api/models/pull', async (req, res) => {
     }
 
     // Start the pull process
-    const response = await axios.post(`${OLLAMA_API_HOST}/api/pull`, { name });
+    const response = await axios.post(`${OLLAMA_API_HOST}/api/pull`, { name }, { timeout: 60000 });
     res.json(response.data);
   } catch (error) {
     console.error('Error pulling model:', error.message);
